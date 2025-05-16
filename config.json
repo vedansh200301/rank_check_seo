@@ -1,0 +1,10 @@
+{
+  "csv_file": "/Users/mipl/Desktop/Rank checker - Sheet1.csv",
+  "target_url": "registerkaro.in",
+  "api_credentials": {
+    "login": "marcom@registerkaro.in",
+    "password": "bd89ed29b2a8ce4c"
+  },
+  "location_code": 2356,
+  "limit": 5
+}

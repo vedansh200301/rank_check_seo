@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test API</title>
+    <script>
+        function testHealthEndpoint() {
+            fetch('http://localhost:5001/health')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('health-result').textContent = JSON.stringify(data);
+                })
+                .catch(error => {
+                    document.getElementById('health-result').textContent = 'Error: ' + error.message;
+                });
+        }
+
+        function testRankingsEndpoint() {
+            const data = {
+                target_url: "registerkaro.in",
+                api_credentials: {
+                    login: "marcom@registerkaro.in",
+                    password: "bd89ed29b2a8ce4c"
+                },
+                location_code: 2356,
+                keywords: ["registerkaro gurgaon"]
+            };
+
+            fetch('http://localhost:5001/check-rankings', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            })
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('rankings-result').textContent = JSON.stringify(data);
+                })
+                .catch(error => {
+                    document.getElementById('rankings-result').textContent = 'Error: ' + error.message;
+                });
+        }
+    </script>
+</head>
+<body>
+    <h1>Test API</h1>
+    
+    <h2>Health Endpoint</h2>
+    <button onclick="testHealthEndpoint()">Test Health Endpoint</button>
+    <pre id="health-result"></pre>
+    
+    <h2>Rankings Endpoint</h2>
+    <button onclick="testRankingsEndpoint()">Test Rankings Endpoint</button>
+    <pre id="rankings-result"></pre>
+</body>
+</html>

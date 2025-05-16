@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  ranking-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: keyword-ranking-api:latest
+    container_name: keyword-ranking-api
+    ports:
+      - "5001:5000"
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+    environment:
+      - FLASK_ENV=production
+      - TZ=Asia/Kolkata
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - ranking-network
+
+networks:
+  ranking-network:
+    driver: bridge

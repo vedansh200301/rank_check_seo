@@ -1,0 +1,96 @@
+{
+  "info": {
+    "_postman_id": "b5e7b5e7-b5e7-b5e7-b5e7-b5e7b5e7b5e7",
+    "name": "Keyword Ranking API",
+    "description": "API for checking keyword rankings using DataForSEO",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/health",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "health"
+          ]
+        },
+        "description": "Check if the API is running"
+      },
+      "response": []
+    },
+    {
+      "name": "Check Rankings (JSON)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"target_url\": \"registerkaro.in\",\n    \"api_credentials\": {\n        \"login\": \"marcom@registerkaro.in\",\n        \"password\": \"bd89ed29b2a8ce4c\"\n    },\n    \"location_code\": 2356,\n    \"limit\": 5,\n    \"keywords\": [\n        \"registerkaro gurgaon\",\n        \"proprietorship firm registration\",\n        \"company registration fees\",\n        \"compliance checklist for proprietorship firm\",\n        \"liquor license online\"\n    ]\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/check-rankings",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "check-rankings"
+          ]
+        },
+        "description": "Check rankings for a list of keywords"
+      },
+      "response": []
+    },
+    {
+      "name": "Check Rankings (CSV Upload)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "csv_file",
+              "type": "file",
+              "src": "/path/to/your/keywords.csv"
+            },
+            {
+              "key": "config",
+              "value": "{\n    \"target_url\": \"registerkaro.in\",\n    \"api_credentials\": {\n        \"login\": \"marcom@registerkaro.in\",\n        \"password\": \"bd89ed29b2a8ce4c\"\n    },\n    \"location_code\": 2356,\n    \"limit\": 10\n}",
+              "type": "text"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{base_url}}/check-rankings",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "check-rankings"
+          ]
+        },
+        "description": "Check rankings by uploading a CSV file"
+      },
+      "response": []
+    }
+  ],
+  "event": [],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:5001",
+      "type": "string"
+    }
+  ]
+}
