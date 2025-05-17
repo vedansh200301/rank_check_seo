@@ -53,7 +53,34 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Handle download button click
     downloadBtn.addEventListener('click', function() {
-        window.location.href = '/download';
+        // Create a hidden iframe for downloading to avoid page navigation
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        document.body.appendChild(iframe);
+        
+        // Set the iframe source to the download URL
+        iframe.src = '/download';
+        
+        // Remove the iframe after a short delay
+        setTimeout(function() {
+            document.body.removeChild(iframe);
+        }, 5000);
+        
+        // Show a message to the user
+        const downloadMessage = document.createElement('div');
+        downloadMessage.className = 'alert alert-success';
+        downloadMessage.textContent = 'Download started. If the file does not download automatically, please click the button again.';
+        downloadMessage.style.marginTop = '10px';
+        
+        // Add the message after the download button
+        downloadBtn.parentNode.appendChild(downloadMessage);
+        
+        // Remove the message after a few seconds
+        setTimeout(function() {
+            if (downloadMessage.parentNode) {
+                downloadMessage.parentNode.removeChild(downloadMessage);
+            }
+        }, 5000);
     });
     
     // Reset UI elements
@@ -156,6 +183,11 @@ document.addEventListener('DOMContentLoaded', function() {
             const rankAbsoluteCell = document.createElement('td');
             rankAbsoluteCell.textContent = result.rank_absolute;
             row.appendChild(rankAbsoluteCell);
+            
+            // Add device information
+            const deviceCell = document.createElement('td');
+            deviceCell.textContent = result.device || document.getElementById('device').value || 'desktop';
+            row.appendChild(deviceCell);
             
             resultsBody.appendChild(row);
         });

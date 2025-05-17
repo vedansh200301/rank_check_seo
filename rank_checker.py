@@ -19,17 +19,25 @@ def read_keywords_from_csv(csv_file):
         print(f"Error reading CSV file: {e}")
         sys.exit(1)
 
-def get_ranking(client, keyword, target_url, location_code, language_code="en"):
+def get_ranking(client, keyword, target_url, location_code, language_code="en", location_name='', device='desktop'):
     """Get the ranking of a target URL for a specific keyword."""
     post_data = dict()
     post_data[len(post_data)] = dict(
         language_code=language_code,
         location_code=location_code,
         keyword=keyword,
-        calculate_rectangles=True
+        calculate_rectangles=True,
+        device=device
     )
     
-    print(f"  Searching for '{keyword}' with location code: {location_code}")
+    # Add geo_location if provided
+    if location_name:
+        post_data[len(post_data)-1]['geo_location'] = location_name
+    
+    if location_name:
+        print(f"  Searching for '{keyword}' with location code: {location_code}, location: {location_name}, device: {device}")
+    else:
+        print(f"  Searching for '{keyword}' with location code: {location_code}, device: {device}")
     
     try:
         response = client.post("/v3/serp/google/organic/live/advanced", post_data)
@@ -71,16 +79,21 @@ def get_ranking(client, keyword, target_url, location_code, language_code="en"):
             # Process the response to find the ranking of the target URL
             if "tasks" in response and len(response["tasks"]) > 0:
                 task = response["tasks"][0]
-                if "result" in task and len(task["result"]) > 0:
+                if "result" in task and task["result"] is not None and len(task["result"]) > 0:
                     result = task["result"][0]
-                    if "items" in result:
+                    if "items" in result and result["items"] is not None:
                         # Handle different structures of the API response
+                        organic_results = []
+                        
                         if isinstance(result["items"], dict) and "organic" in result["items"]:
-                            organic_results = result["items"]["organic"]
-                            print(f"  Found {len(organic_results)} organic results for '{keyword}'")
+                            if result["items"]["organic"] is not None:
+                                organic_results = result["items"]["organic"]
+                                print(f"  Found {len(organic_results)} organic results for '{keyword}'")
+                            else:
+                                print(f"  No organic results found for '{keyword}'")
+                                return "No results found"
                         elif isinstance(result["items"], list):
                             # If items is a list, check if any item has a type of "organic"
-                            organic_results = []
                             for item in result["items"]:
                                 if isinstance(item, dict) and item.get("type") == "organic":
                                     organic_results.append(item)
@@ -94,6 +107,7 @@ def get_ranking(client, keyword, target_url, location_code, language_code="en"):
                             print(f"  Unexpected items structure for '{keyword}'")
                             return "No results found"
                         
+                        # Process organic results to find target URL
                         for position, item in enumerate(organic_results, 1):
                             if "url" in item:
                                 result_url = item["url"].lower()
@@ -128,6 +142,15 @@ def get_ranking(client, keyword, target_url, location_code, language_code="en"):
                         
                         # If the URL is not found in the results
                         return "Not in top results"
+                    else:
+                        print(f"  No items found in result for '{keyword}'")
+                        return "No results found"
+                else:
+                    print(f"  No valid result found in task for '{keyword}'")
+                    return "No results found"
+            else:
+                print(f"  No tasks found in response for '{keyword}'")
+                return "No results found"
             
             return "No results found"
         else:
@@ -212,7 +235,90 @@ class MockClient:
             
         return mock_response
 
-# Function removed as it's no longer needed - CSV is updated in real-time for each keyword
+def update_csv_with_rankings(csv_file, keywords_with_rankings):
+    """Update the CSV file with ranking information."""
+    try:
+        # Read all the original data from the CSV
+        all_rows = []
+        with open(csv_file, 'r') as file:
+            reader = csv.DictReader(file)
+            # Store the fieldnames (header)
+            header = reader.fieldnames.copy() if reader.fieldnames else []
+            
+            # Read all rows
+            for row in reader:
+                all_rows.append(row)
+        
+        # Check if ranking columns exist in the header, if not, add them
+        ranking_columns = ['Ranking', 'Rank Group', 'Rank Absolute', 'Device']
+        for column in ranking_columns:
+            if column not in header:
+                header.append(column)
+        
+        # Create dictionaries to map keywords to their rankings
+        rankings_dict = {}
+        rank_group_dict = {}
+        rank_absolute_dict = {}
+        
+        print("\nDebug: Processing keywords_with_rankings in update_csv_with_rankings")
+        for row in keywords_with_rankings:
+            keyword_column = 'Keywords' if 'Keywords' in row else 'Keyword'
+            if keyword_column in row:
+                keyword = row[keyword_column]
+                print(f"Debug: Processing keyword: {keyword}")
+                print(f"Debug: Row keys: {list(row.keys())}")
+                print(f"Debug: Row values: {row}")
+                
+                # Check if we have ranking metrics in separate columns
+                if 'Ranking' in row and 'Rank Group' in row and 'Rank Absolute' in row:
+                    print(f"Debug: Found separate ranking columns")
+                    rankings_dict[keyword] = row['Ranking']
+                    rank_group_dict[keyword] = row['Rank Group']
+                    rank_absolute_dict[keyword] = row['Rank Absolute']
+                # Check if we have a dictionary in the Ranking column
+                elif 'Ranking' in row and isinstance(row['Ranking'], dict):
+                    print(f"Debug: Found ranking dictionary: {row['Ranking']}")
+                    # If ranking is a dictionary with multiple metrics
+                    rankings_dict[keyword] = row['Ranking'].get('position', 'N/A')
+                    rank_group_dict[keyword] = row['Ranking'].get('rank_group', 'N/A')
+                    rank_absolute_dict[keyword] = row['Ranking'].get('rank_absolute', 'N/A')
+                # Just a simple ranking value
+                elif 'Ranking' in row:
+                    print(f"Debug: Found simple ranking: {row['Ranking']}")
+                    # If ranking is just a position or string
+                    rankings_dict[keyword] = row['Ranking']
+                    rank_group_dict[keyword] = row.get('Rank Group', 'N/A')
+                    rank_absolute_dict[keyword] = row.get('Rank Absolute', 'N/A')
+                else:
+                    print(f"Debug: No ranking information found")
+        
+        # Update the rankings in the original data
+        for row in all_rows:
+            keyword_column = 'Keywords' if 'Keywords' in row else 'Keyword'
+            if keyword_column in row and row[keyword_column] in rankings_dict:
+                keyword = row[keyword_column]
+                row['Ranking'] = rankings_dict[keyword]
+                row['Rank Group'] = rank_group_dict[keyword]
+                row['Rank Absolute'] = rank_absolute_dict[keyword]
+        
+        # Write all the data back to the CSV
+        with open(csv_file, 'w', newline='') as file:
+            writer = csv.DictWriter(file, fieldnames=header)
+            writer.writeheader()
+            writer.writerows(all_rows)
+        
+        # Force flush to disk
+        os.fsync(file.fileno())
+            
+        print(f"Successfully updated {csv_file} with rankings.")
+        
+        # Verify the file was updated
+        print(f"Verifying file update...")
+        with open(csv_file, 'r') as file:
+            content = file.read()
+            print(f"File size: {len(content)} bytes")
+    except Exception as e:
+        print(f"Error updating CSV file: {e}")
 
 def load_config(config_file):
     """Load configuration from a JSON file."""
@@ -274,41 +380,34 @@ def main():
             target_url = config['target_url']
             location_code = config.get('location_code', 2840)
             limit = config.get('limit')
+            
+            # Check if test mode is enabled
             test_mode = config.get('test_mode', False)
             
-            if not test_mode and 'api_credentials' in config:
-                api_login = config['api_credentials'].get('login')
-                api_password = config['api_credentials'].get('password')
+            # Get API credentials if not in test mode
+            if not test_mode:
+                api_credentials = config.get('api_credentials', {})
+                api_login = api_credentials.get('login')
+                api_password = api_credentials.get('password')
             
-            # Print configuration
-            print(f"CSV file: {csv_file}")
-            print(f"Target URL: {target_url}")
-            print(f"Location code: {location_code}")
-            if limit:
-                print(f"Limit: {limit}")
-            print(f"Test mode: {test_mode}")
-            
-            # Validate file path
-            if not os.path.exists(csv_file):
-                print(f"Error: CSV file not found: {csv_file}")
-                sys.exit(1)
-        else:
-            print("Error: --config requires a value")
-            sys.exit(1)
-    else:
-        # Process traditional command line arguments
-        if "--test" in args:
-            test_mode = True
-            args.remove("--test")
-            print("Running in TEST MODE with simulated API responses")
+            # Remove the config arguments
+            args.pop(config_index)  # Remove --config
+            args.pop(config_index)  # Remove the value
     
+    # Check for test mode
+    if "--test" in args:
+        test_mode = True
+        test_index = args.index("--test")
+        args.pop(test_index)  # Remove --test
+    
+    # Check for limit
     if "--limit" in args:
         limit_index = args.index("--limit")
         if limit_index + 1 < len(args):
             try:
                 limit = int(args[limit_index + 1])
-                print(f"Processing only the first {limit} keywords")
-                # Remove the limit argument and its value
+                print(f"Limited to first {limit} keywords")
+                # Remove the limit arguments
                 args.pop(limit_index)  # Remove --limit
                 args.pop(limit_index)  # Remove the value
             except ValueError:
@@ -318,6 +417,7 @@ def main():
             print("Error: --limit requires a value")
             sys.exit(1)
     
+    # Check for location code
     if "--location" in args:
         location_index = args.index("--location")
         if location_index + 1 < len(args):
@@ -347,6 +447,7 @@ def main():
             print("  2826 - United Kingdom")
             print("  2036 - Australia")
             print("  2124 - Canada")
+            print("  2784 - United Arab Emirates")
             sys.exit(1)
         elif not test_mode and len(args) < 5:
             print("Usage:")
@@ -359,6 +460,7 @@ def main():
             print("  2826 - United Kingdom")
             print("  2036 - Australia")
             print("  2124 - Canada")
+            print("  2784 - United Arab Emirates")
             sys.exit(1)
         
         # Get the required arguments
@@ -408,7 +510,7 @@ def main():
             all_rows.append(row)
     
     # Check if ranking columns exist in the header, if not, add them
-    ranking_columns = ['Ranking', 'Rank Group', 'Rank Absolute']
+    ranking_columns = ['Ranking', 'Rank Group', 'Rank Absolute', 'Device']
     for column in ranking_columns:
         if column not in header:
             header.append(column)
@@ -431,13 +533,14 @@ def main():
         if test_mode:
             ranking_info = get_mock_ranking(keyword, target_url)
         else:
-            ranking_info = get_ranking(client, keyword, target_url, location_code)
+            ranking_info = get_ranking(client, keyword, target_url, location_code, location_name='', device='desktop')
         
         # Handle different types of ranking values
         if isinstance(ranking_info, dict):
             keyword_row['Ranking'] = ranking_info.get('position', 'N/A')
             keyword_row['Rank Group'] = ranking_info.get('rank_group', 'N/A')
             keyword_row['Rank Absolute'] = ranking_info.get('rank_absolute', 'N/A')
+            keyword_row['Device'] = 'desktop'
             
             # Print detailed ranking information for debugging
             print(f"  Storing ranking data: Position={keyword_row['Ranking']}, Rank Group={keyword_row['Rank Group']}, Rank Absolute={keyword_row['Rank Absolute']}")
@@ -445,6 +548,7 @@ def main():
             keyword_row['Ranking'] = ranking_info
             keyword_row['Rank Group'] = 'N/A'
             keyword_row['Rank Absolute'] = 'N/A'
+            keyword_row['Device'] = 'desktop'
         
         # Update the corresponding row in all_rows
         for row in all_rows:
@@ -452,6 +556,7 @@ def main():
                 row['Ranking'] = keyword_row['Ranking']
                 row['Rank Group'] = keyword_row['Rank Group']
                 row['Rank Absolute'] = keyword_row['Rank Absolute']
+                row['Device'] = keyword_row['Device']
                 break
         
         # Write the updated data back to the CSV file immediately

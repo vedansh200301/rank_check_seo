@@ -5,6 +5,8 @@ import csv
 import io
 import threading
 import time
+import shutil
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, render_template, redirect, url_for, send_file, Response, stream_with_context
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -20,6 +22,46 @@ CORS(app)  # Enable CORS for all routes
 os.makedirs('templates', exist_ok=True)
 os.makedirs('static', exist_ok=True)
 os.makedirs('uploads', exist_ok=True)
+
+# Function to clean up old temporary files
+def cleanup_old_files():
+    """Clean up files in the uploads directory that are older than 24 hours"""
+    try:
+        uploads_dir = 'uploads'
+        current_time = datetime.now()
+        
+        # Get all files in the uploads directory
+        for filename in os.listdir(uploads_dir):
+            file_path = os.path.join(uploads_dir, filename)
+            
+            # Skip directories
+            if os.path.isdir(file_path):
+                continue
+                
+            # Get the file's modification time
+            file_mod_time = datetime.fromtimestamp(os.path.getmtime(file_path))
+            
+            # If the file is older than 24 hours, delete it
+            if current_time - file_mod_time > timedelta(hours=24):
+                os.remove(file_path)
+                print(f"Cleaned up old file: {file_path}")
+    except Exception as e:
+        print(f"Error cleaning up old files: {e}")
+
+# Start a background thread to clean up old files periodically
+def start_cleanup_thread():
+    """Start a background thread to clean up old files every hour"""
+    def cleanup_thread():
+        while True:
+            cleanup_old_files()
+            time.sleep(3600)  # Sleep for 1 hour
+    
+    thread = threading.Thread(target=cleanup_thread)
+    thread.daemon = True
+    thread.start()
+
+# Start the cleanup thread
+start_cleanup_thread()
 
 # Global variables to track processing status
 processing_status = {
@@ -68,6 +110,8 @@ def upload_file():
     api_login = request.form.get('api_login')
     api_password = request.form.get('api_password')
     location_code = request.form.get('location_code', '2356')  # Default to India
+    location_name = request.form.get('location_name', '')  # Optional city name
+    device = request.form.get('device', 'desktop')  # Default to desktop
     limit = request.form.get('limit', '')
     
     # Validate required fields
@@ -99,7 +143,7 @@ def upload_file():
     
     thread = threading.Thread(
         target=process_csv_file,
-        args=(file_path, target_url, api_login, api_password, int(location_code), limit)
+        args=(file_path, target_url, api_login, api_password, int(location_code), limit, location_name, device)
     )
     thread.daemon = True
     thread.start()
@@ -114,7 +158,75 @@ def download_file():
     if not processing_status['csv_file_path'] or not os.path.exists(processing_status['csv_file_path']):
         return jsonify({"error": "No processed file available"}), 404
     
-    return send_file(processing_status['csv_file_path'], as_attachment=True)
+    try:
+        # Get the original filename
+        filename = os.path.basename(processing_status['csv_file_path'])
+        
+        # Read the file content into memory instead of creating a temporary file
+        with open(processing_status['csv_file_path'], 'rb') as f:
+            file_content = f.read()
+        
+        # Create a BytesIO object from the file content
+        file_stream = io.BytesIO(file_content)
+        file_stream.seek(0)
+        
+        # Set explicit headers for file download
+        headers = {
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Type': 'text/csv',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+        }
+        
+        # Return the file as a streaming response
+        return Response(
+            file_stream,
+            mimetype='text/csv',
+            headers=headers,
+            direct_passthrough=True
+        )
+    except Exception as e:
+        print(f"Error downloading file: {e}")
+        return jsonify({"error": f"Error downloading file: {str(e)}"}), 500
+
+@app.route('/download-api/<file_id>', methods=['GET'])
+def download_api_file(file_id):
+    """Download a file by ID (filename)"""
+    file_path = os.path.join('uploads', file_id)
+    
+    if not os.path.exists(file_path):
+        return jsonify({"error": "File not found"}), 404
+    
+    try:
+        # Read the file content into memory
+        with open(file_path, 'rb') as f:
+            file_content = f.read()
+        
+        # Create a BytesIO object from the file content
+        file_stream = io.BytesIO(file_content)
+        file_stream.seek(0)
+        
+        # Set explicit headers for file download
+        headers = {
+            'Content-Disposition': f'attachment; filename="{file_id}"',
+            'Content-Type': 'text/csv',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0',
+            'Access-Control-Allow-Origin': '*'  # Allow cross-origin requests
+        }
+        
+        # Return the file as a streaming response
+        return Response(
+            file_stream,
+            mimetype='text/csv',
+            headers=headers,
+            direct_passthrough=True
+        )
+    except Exception as e:
+        print(f"Error downloading API file: {e}")
+        return jsonify({"error": f"Error downloading file: {str(e)}"}), 500
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -134,6 +246,8 @@ def check_rankings():
             "password": "your_api_password"
         },
         "location_code": 2356,
+        "location_name": "Mumbai",  // Optional city name
+        "device": "desktop",        // desktop, mobile, or tablet
         "limit": 10,
         "keywords": ["keyword1", "keyword2", "keyword3"]
     }
@@ -164,6 +278,8 @@ def check_rankings():
         api_login = config.get('api_credentials', {}).get('login')
         api_password = config.get('api_credentials', {}).get('password')
         location_code = config.get('location_code', 2356)  # Default to India
+        location_name = config.get('location_name', '')  # Optional city name
+        device = config.get('device', 'desktop')  # Default to desktop
         limit = config.get('limit')
         
         if not target_url or not api_login or not api_password:
@@ -192,7 +308,7 @@ def check_rankings():
                 header = reader.fieldnames.copy() if reader.fieldnames else []
                 
                 # Check if ranking columns exist in the header, if not, add them
-                ranking_columns = ['Ranking', 'Rank Group', 'Rank Absolute']
+                ranking_columns = ['Ranking', 'Rank Group', 'Rank Absolute', 'Device']
                 for column in ranking_columns:
                     if column not in header:
                         header.append(column)
@@ -206,8 +322,8 @@ def check_rankings():
                     keyword = row[keyword_column]
                     print(f"Processing keyword: {keyword}")
                     
-                    # Get ranking
-                    ranking_info = get_ranking(client, keyword, target_url, location_code)
+                    # Get ranking with geo_location parameter
+                    ranking_info = get_ranking(client, keyword, target_url, location_code, location_name=location_name, device=device)
                     
                     # Store result
                     if isinstance(ranking_info, dict):
@@ -215,25 +331,29 @@ def check_rankings():
                             "keyword": keyword,
                             "ranking": ranking_info.get('position', 'N/A'),
                             "rank_group": ranking_info.get('rank_group', 'N/A'),
-                            "rank_absolute": ranking_info.get('rank_absolute', 'N/A')
+                            "rank_absolute": ranking_info.get('rank_absolute', 'N/A'),
+                            "device": device
                         }
                         
                         # Update the row with ranking info
                         row['Ranking'] = ranking_info.get('position', 'N/A')
                         row['Rank Group'] = ranking_info.get('rank_group', 'N/A')
                         row['Rank Absolute'] = ranking_info.get('rank_absolute', 'N/A')
+                        row['Device'] = device
                     else:
                         result = {
                             "keyword": keyword,
                             "ranking": ranking_info,
                             "rank_group": 'N/A',
-                            "rank_absolute": 'N/A'
+                            "rank_absolute": 'N/A',
+                            "device": device
                         }
                         
                         # Update the row with ranking info
                         row['Ranking'] = ranking_info
                         row['Rank Group'] = 'N/A'
                         row['Rank Absolute'] = 'N/A'
+                        row['Device'] = device
                         
                     results.append(result)
                 
@@ -247,15 +367,18 @@ def check_rankings():
                 with open(file_path, 'r') as f:
                     csv_content = f.read()
                 
-            # Clean up the temporary file
-            os.remove(file_path)
-            os.rmdir(temp_dir)
-            
-            # Return both JSON results and CSV content
-            return jsonify({
-                "results": results,
-                "csv_content": csv_content
-            }), 200
+                # Create a download URL for the file
+                download_url = request.url_root.rstrip('/') + '/download-api/' + os.path.basename(file_path)
+                
+                # Don't remove the file yet, as it will be needed for download
+                # We'll clean it up after download or after a timeout
+                
+                # Return JSON results, CSV content, and download URL
+                return jsonify({
+                    "results": results,
+                    "csv_content": csv_content,
+                    "download_url": download_url
+                }), 200
                 
         except Exception as e:
             return jsonify({"error": f"Error processing CSV: {str(e)}"}), 500
@@ -271,6 +394,8 @@ def check_rankings():
         api_login = data.get('api_credentials', {}).get('login')
         api_password = data.get('api_credentials', {}).get('password')
         location_code = data.get('location_code', 2356)  # Default to India
+        location_name = data.get('location_name', '')  # Optional city name
+        device = data.get('device', 'desktop')  # Default to desktop
         keywords = data.get('keywords', [])
         limit = data.get('limit')
         
@@ -291,8 +416,8 @@ def check_rankings():
         for keyword in keywords:
             print(f"Processing keyword: {keyword}")
             
-            # Get ranking
-            ranking_info = get_ranking(client, keyword, target_url, location_code)
+            # Get ranking with geo_location parameter
+            ranking_info = get_ranking(client, keyword, target_url, location_code, location_name=location_name, device=device)
             
             # Store result
             if isinstance(ranking_info, dict):
@@ -300,21 +425,23 @@ def check_rankings():
                     "keyword": keyword,
                     "ranking": ranking_info.get('position', 'N/A'),
                     "rank_group": ranking_info.get('rank_group', 'N/A'),
-                    "rank_absolute": ranking_info.get('rank_absolute', 'N/A')
+                    "rank_absolute": ranking_info.get('rank_absolute', 'N/A'),
+                    "device": device
                 }
             else:
                 result = {
                     "keyword": keyword,
                     "ranking": ranking_info,
                     "rank_group": 'N/A',
-                    "rank_absolute": 'N/A'
+                    "rank_absolute": 'N/A',
+                    "device": device
                 }
                 
             results.append(result)
             
         return jsonify({"results": results}), 200
 
-def process_csv_file(csv_file, target_url, api_login, api_password, location_code, limit=None):
+def process_csv_file(csv_file, target_url, api_login, api_password, location_code, limit=None, location_name='', device='desktop'):
     """Process the CSV file in the background"""
     global processing_status
     
@@ -360,7 +487,7 @@ def process_csv_file(csv_file, target_url, api_login, api_password, location_cod
                 all_rows.append(row)
         
         # Check if ranking columns exist in the header, if not, add them
-        ranking_columns = ['Ranking', 'Rank Group', 'Rank Absolute']
+        ranking_columns = ['Ranking', 'Rank Group', 'Rank Absolute', 'Device']
         for column in ranking_columns:
             if column not in header:
                 header.append(column)
@@ -375,7 +502,8 @@ def process_csv_file(csv_file, target_url, api_login, api_password, location_cod
             
             # Get ranking
             try:
-                ranking_info = get_ranking(client, keyword, target_url, location_code)
+                # Pass location_name as geo_location parameter
+                ranking_info = get_ranking(client, keyword, target_url, location_code, location_name=location_name, device=device)
                 
                 # Handle different types of ranking values
                 if isinstance(ranking_info, dict):
@@ -383,25 +511,29 @@ def process_csv_file(csv_file, target_url, api_login, api_password, location_cod
                         "keyword": keyword,
                         "ranking": ranking_info.get('position', 'N/A'),
                         "rank_group": ranking_info.get('rank_group', 'N/A'),
-                        "rank_absolute": ranking_info.get('rank_absolute', 'N/A')
+                        "rank_absolute": ranking_info.get('rank_absolute', 'N/A'),
+                        "device": device
                     }
                     
                     # Update the row data
                     keyword_row['Ranking'] = ranking_info.get('position', 'N/A')
                     keyword_row['Rank Group'] = ranking_info.get('rank_group', 'N/A')
                     keyword_row['Rank Absolute'] = ranking_info.get('rank_absolute', 'N/A')
+                    keyword_row['Device'] = device
                 else:
                     result = {
                         "keyword": keyword,
                         "ranking": ranking_info,
                         "rank_group": 'N/A',
-                        "rank_absolute": 'N/A'
+                        "rank_absolute": 'N/A',
+                        "device": device
                     }
                     
                     # Update the row data
                     keyword_row['Ranking'] = ranking_info
                     keyword_row['Rank Group'] = 'N/A'
                     keyword_row['Rank Absolute'] = 'N/A'
+                    keyword_row['Device'] = device
                 
                 # Add to results
                 processing_status['results'].append(result)
@@ -438,5 +570,5 @@ def process_csv_file(csv_file, target_url, api_login, api_password, location_cod
         processing_status['is_processing'] = False
 
 if __name__ == '__main__':
-    # Run the Flask app on port 5000
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Run the Flask app on port 5050
+    app.run(host='127.0.0.1', port=5050, debug=True)

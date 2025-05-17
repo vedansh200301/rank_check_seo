@@ -45,6 +45,20 @@
                                     <option value="2826">United Kingdom (2826)</option>
                                     <option value="2036">Australia (2036)</option>
                                     <option value="2124">Canada (2124)</option>
+                                    <option value="2784">United Arab Emirates (2784)</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label for="location-name" class="form-label">Location (Optional)</label>
+                                <input type="text" class="form-control" id="location-name" name="location_name" placeholder="e.g., Mumbai, Delhi, Bangalore">
+                                <div class="form-text">Specific location for more accurate results</div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="device" class="form-label">Device</label>
+                                <select class="form-select" id="device" name="device">
+                                    <option value="desktop" selected>Desktop</option>
+                                    <option value="mobile">Mobile</option>
+                                    <option value="tablet">Tablet</option>
                                 </select>
                             </div>
                             <div class="mb-3">
@@ -95,6 +109,7 @@
                                         <th>Ranking</th>
                                         <th>Rank Group</th>
                                         <th>Rank Absolute</th>
+                                        <th>Device</th>
                                     </tr>
                                 </thead>
                                 <tbody id="results-body">
