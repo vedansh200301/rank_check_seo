@@ -6,6 +6,7 @@ import io
 import threading
 import time
 import shutil
+import hashlib
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, render_template, redirect, url_for, send_file, Response, stream_with_context
 from flask_cors import CORS
@@ -71,7 +72,13 @@ processing_status = {
     'current_keyword': '',
     'results': [],
     'error': None,
-    'csv_file_path': None
+    'csv_file_path': None,
+    'original_filename': None,
+    'timestamp': int(time.time()),  # Add timestamp for cache busting
+    'device': 'desktop',  # Default device
+    'location_code': 2356,  # Default location code (India)
+    'location_name': '',  # Default location name
+    'session_id': ''  # Unique session identifier
 }
 
 @app.route('/', methods=['GET'])
@@ -83,7 +90,58 @@ def index():
 def status():
     """Return the current processing status"""
     global processing_status
-    return jsonify(processing_status)
+    
+    # Get query parameters
+    device = request.args.get('device')
+    location_code = request.args.get('location_code')
+    location_name = request.args.get('location_name')
+    session_id = request.args.get('session_id')
+    
+    print(f"Status request received with parameters: device={device}, location_code={location_code}, location_name={location_name}, session_id={session_id}")
+    print(f"Current processing status: {processing_status}")
+    
+    # Create a copy of the processing status
+    status_copy = processing_status.copy()
+    
+    # Add a flag to indicate if the parameters match the current processing session
+    if session_id:
+        status_copy['parameters_match'] = (session_id == processing_status.get('session_id', ''))
+        print(f"Session ID match: {status_copy['parameters_match']}")
+    elif device or location_code or location_name:
+        # For debugging
+        print(f"Checking parameter match: frontend={device},{location_code},{location_name} vs backend={processing_status.get('device', '')},{processing_status.get('location_code', '')},{processing_status.get('location_name', '')}")
+        
+        # Always consider it a match if we're not currently processing
+        if not processing_status['is_processing']:
+            status_copy['parameters_match'] = True
+            print("Not currently processing, so considering parameters to match")
+        else:
+            # Check if individual parameters match
+            device_match = not device or device == processing_status.get('device', '')
+            location_code_match = not location_code or location_code == str(processing_status.get('location_code', ''))
+            location_name_match = not location_name or location_name == processing_status.get('location_name', '')
+            status_copy['parameters_match'] = device_match and location_code_match and location_name_match
+            print(f"Parameter matches: device={device_match}, location_code={location_code_match}, location_name={location_name_match}")
+    else:
+        # No parameters provided, assume match
+        status_copy['parameters_match'] = True
+        print("No parameters provided, assuming match")
+    
+    # Ensure results is always an array
+    if 'results' in status_copy and status_copy['results'] is not None:
+        print(f"Results count: {len(status_copy['results'])}")
+    else:
+        print("No results in status")
+        status_copy['results'] = []
+    
+    # Add cache-busting headers
+    response = jsonify(status_copy)
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    
+    print(f"Sending status response with {len(status_copy.get('results', []))} results")
+    return response
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -94,15 +152,31 @@ def upload_file():
     if processing_status['is_processing']:
         return jsonify({"error": "Already processing a file. Please wait."}), 400
     
-    # Reset status
+    # Reset status with new parameters
+    current_timestamp = int(time.time())
+    current_device = request.form.get('device', 'desktop')
+    current_location_code = request.form.get('location_code', '2356')
+    current_location_name = request.form.get('location_name', '')
+    
+    # Create a unique session ID
+    device_hash = hashlib.md5(current_device.encode()).hexdigest()[:8]
+    location_hash = hashlib.md5(f"{current_location_code}_{current_location_name}".encode()).hexdigest()[:8]
+    session_id = f"{current_timestamp}_{device_hash}_{location_hash}"
+    
     processing_status = {
         'is_processing': False,
         'total_keywords': 0,
         'processed_keywords': 0,
         'current_keyword': '',
-        'results': [],
+        'results': [],  # Initialize as empty array
         'error': None,
-        'csv_file_path': None
+        'csv_file_path': None,
+        'original_filename': None,
+        'timestamp': current_timestamp,
+        'device': current_device,
+        'location_code': current_location_code,
+        'location_name': current_location_name,
+        'session_id': session_id
     }
     
     # Get form data
@@ -126,10 +200,25 @@ def upload_file():
     if csv_file.filename == '':
         return jsonify({"error": "No file selected"}), 400
     
-    # Save the uploaded file
-    filename = secure_filename(csv_file.filename)
-    file_path = os.path.join('uploads', filename)
+    # Save the uploaded file with a unique name to prevent conflicts
+    original_filename = secure_filename(csv_file.filename)
+    
+    # Create a unique identifier based on all parameters
+    timestamp = int(time.time())
+    device_hash = hashlib.md5(device.encode()).hexdigest()[:8]
+    location_hash = hashlib.md5(f"{location_code}_{location_name}".encode()).hexdigest()[:8]
+    
+    # Create a unique filename that includes parameter hashes
+    unique_filename = f"{timestamp}_{device_hash}_{location_hash}_{original_filename}"
+    file_path = os.path.join('uploads', unique_filename)
     csv_file.save(file_path)
+    
+    # Store the original filename and parameters for display purposes
+    processing_status['original_filename'] = original_filename
+    processing_status['device'] = device
+    processing_status['location_code'] = location_code
+    processing_status['location_name'] = location_name
+    processing_status['session_id'] = f"{timestamp}_{device_hash}_{location_hash}"
     
     # Convert limit to int if provided
     if limit and limit.isdigit():
@@ -159,8 +248,8 @@ def download_file():
         return jsonify({"error": "No processed file available"}), 404
     
     try:
-        # Get the original filename
-        filename = os.path.basename(processing_status['csv_file_path'])
+        # Use the original filename for the download if available, otherwise use the path basename
+        filename = processing_status.get('original_filename') or os.path.basename(processing_status['csv_file_path'])
         
         # Read the file content into memory instead of creating a temporary file
         with open(processing_status['csv_file_path'], 'rb') as f:
@@ -207,9 +296,13 @@ def download_api_file(file_id):
         file_stream = io.BytesIO(file_content)
         file_stream.seek(0)
         
+        # Use a more user-friendly filename if available
+        global processing_status
+        display_filename = processing_status.get('original_filename', file_id)
+        
         # Set explicit headers for file download
         headers = {
-            'Content-Disposition': f'attachment; filename="{file_id}"',
+            'Content-Disposition': f'attachment; filename="{display_filename}"',
             'Content-Type': 'text/csv',
             'Cache-Control': 'no-cache, no-store, must-revalidate',
             'Pragma': 'no-cache',
@@ -267,10 +360,17 @@ def check_rankings():
         if csv_file.filename == '':
             return jsonify({"error": "No file selected"}), 400
             
-        # Save the uploaded file to a temporary location
-        filename = secure_filename(csv_file.filename)
-        temp_dir = tempfile.mkdtemp()
-        file_path = os.path.join(temp_dir, filename)
+        # Save the uploaded file with a unique name to prevent conflicts
+        original_filename = secure_filename(csv_file.filename)
+        # Add timestamp to filename to make it unique
+        timestamp = int(time.time())
+        unique_filename = f"{timestamp}_{original_filename}"
+        
+        # Create uploads directory if it doesn't exist
+        os.makedirs('uploads', exist_ok=True)
+        
+        # Save to uploads directory instead of a temporary directory
+        file_path = os.path.join('uploads', unique_filename)
         csv_file.save(file_path)
         
         # Process the CSV file
@@ -492,82 +592,134 @@ def process_csv_file(csv_file, target_url, api_login, api_password, location_cod
             if column not in header:
                 header.append(column)
         
-        # Process each keyword
-        for i, keyword_row in enumerate(keywords_data):
-            keyword = keyword_row[keyword_column]
+        # Create a ranking cache to avoid redundant API calls
+        ranking_cache = {}
+        
+        # Process keywords in batches for better performance
+        batch_size = 5  # Reduce batch size to 5 keywords to avoid timeouts
+        total_keywords = len(keywords_data)
+        total_batches = (total_keywords + batch_size - 1) // batch_size
+        
+        for batch_index in range(total_batches):
+            start_idx = batch_index * batch_size
+            end_idx = min(start_idx + batch_size, total_keywords)
+            batch = keywords_data[start_idx:end_idx]
             
-            # Update status
-            processing_status['current_keyword'] = keyword
-            processing_status['processed_keywords'] = i
+            print(f"Processing batch {batch_index + 1}/{total_batches} (keywords {start_idx + 1}-{end_idx} of {total_keywords})")
             
-            # Get ranking
-            try:
-                # Pass location_name as geo_location parameter
-                ranking_info = get_ranking(client, keyword, target_url, location_code, location_name=location_name, device=device)
+            # Process each keyword in the batch
+            for j, keyword_row in enumerate(batch):
+                keyword = keyword_row[keyword_column]
+                current_index = start_idx + j
                 
-                # Handle different types of ranking values
-                if isinstance(ranking_info, dict):
-                    result = {
-                        "keyword": keyword,
-                        "ranking": ranking_info.get('position', 'N/A'),
-                        "rank_group": ranking_info.get('rank_group', 'N/A'),
-                        "rank_absolute": ranking_info.get('rank_absolute', 'N/A'),
-                        "device": device
-                    }
+                # Update status
+                processing_status['current_keyword'] = keyword
+                processing_status['processed_keywords'] = current_index
+                
+                # Create a cache key
+                cache_key = f"{keyword}_{target_url}_{location_code}_{location_name}_{device}"
+                
+                try:
+                    # Check if we have a cached result
+                    if cache_key in ranking_cache:
+                        print(f"Using cached result for '{keyword}'")
+                        ranking_info = ranking_cache[cache_key]
+                    else:
+                        # Pass location_name as geo_location parameter
+                        print(f"Fetching ranking for '{keyword}' with location: {location_code}, location_name: {location_name}, device: {device}")
+                        ranking_info = get_ranking(client, keyword, target_url, location_code, location_name=location_name, device=device)
+                        # Cache the result
+                        ranking_cache[cache_key] = ranking_info
+                        
+                        # Add a small delay between API calls within a batch
+                        time.sleep(1)
                     
-                    # Update the row data
-                    keyword_row['Ranking'] = ranking_info.get('position', 'N/A')
-                    keyword_row['Rank Group'] = ranking_info.get('rank_group', 'N/A')
-                    keyword_row['Rank Absolute'] = ranking_info.get('rank_absolute', 'N/A')
-                    keyword_row['Device'] = device
-                else:
-                    result = {
-                        "keyword": keyword,
-                        "ranking": ranking_info,
-                        "rank_group": 'N/A',
-                        "rank_absolute": 'N/A',
-                        "device": device
-                    }
+                    # Handle different types of ranking values
+                    if isinstance(ranking_info, dict):
+                        result = {
+                            "keyword": keyword,
+                            "ranking": ranking_info.get('position', 'N/A'),
+                            "rank_group": ranking_info.get('rank_group', 'N/A'),
+                            "rank_absolute": ranking_info.get('rank_absolute', 'N/A'),
+                            "device": device
+                        }
+                        
+                        # Update the row data
+                        keyword_row['Ranking'] = ranking_info.get('position', 'N/A')
+                        keyword_row['Rank Group'] = ranking_info.get('rank_group', 'N/A')
+                        keyword_row['Rank Absolute'] = ranking_info.get('rank_absolute', 'N/A')
+                        keyword_row['Device'] = device
+                    else:
+                        result = {
+                            "keyword": keyword,
+                            "ranking": ranking_info,
+                            "rank_group": 'N/A',
+                            "rank_absolute": 'N/A',
+                            "device": device
+                        }
+                        
+                        # Update the row data
+                        keyword_row['Ranking'] = ranking_info
+                        keyword_row['Rank Group'] = 'N/A'
+                        keyword_row['Rank Absolute'] = 'N/A'
+                        keyword_row['Device'] = device
                     
-                    # Update the row data
-                    keyword_row['Ranking'] = ranking_info
-                    keyword_row['Rank Group'] = 'N/A'
-                    keyword_row['Rank Absolute'] = 'N/A'
-                    keyword_row['Device'] = device
+                    # Add to results
+                    processing_status['results'].append(result)
+                    
+                    # Update the corresponding row in all_rows
+                    for row in all_rows:
+                        if row[keyword_column] == keyword:
+                            row['Ranking'] = keyword_row['Ranking']
+                            row['Rank Group'] = keyword_row['Rank Group']
+                            row['Rank Absolute'] = keyword_row['Rank Absolute']
+                            row['Device'] = device
+                            break
+                    
+                except Exception as e:
+                    processing_status['error'] = f"Error processing keyword '{keyword}': {str(e)}"
+                    # Continue processing other keywords
                 
-                # Add to results
-                processing_status['results'].append(result)
-                
-                # Update the corresponding row in all_rows
-                for row in all_rows:
-                    if row[keyword_column] == keyword:
-                        row['Ranking'] = keyword_row['Ranking']
-                        row['Rank Group'] = keyword_row['Rank Group']
-                        row['Rank Absolute'] = keyword_row['Rank Absolute']
-                        break
-                
-                # Write the updated data back to the CSV file immediately
-                with open(csv_file, 'w', newline='') as file:
-                    writer = csv.DictWriter(file, fieldnames=header)
-                    writer.writeheader()
-                    writer.writerows(all_rows)
-                
-            except Exception as e:
-                processing_status['error'] = f"Error processing keyword '{keyword}': {str(e)}"
-                # Continue processing other keywords
+                # Update the processed count after each keyword
+                processing_status['processed_keywords'] = current_index + 1
             
-            # Add a small delay to avoid hitting API rate limits
-            time.sleep(1)
+            # Write the updated data back to the CSV file after processing the batch
+            with open(csv_file, 'w', newline='') as file:
+                writer = csv.DictWriter(file, fieldnames=header)
+                writer.writeheader()
+                writer.writerows(all_rows)
+            
+            print(f"Updated CSV file with rankings for batch {batch_index + 1}/{total_batches}")
+            
+            # Add a longer delay between batches to avoid hitting API rate limits
+            if batch_index < total_batches - 1:
+                print(f"Waiting 5 seconds before processing next batch...")
+                time.sleep(5)
         
         # Update final status
         processing_status['processed_keywords'] = processing_status['total_keywords']
         processing_status['current_keyword'] = 'Completed'
+        print("Processing completed successfully!")
+        print(f"Final results count: {len(processing_status.get('results', []))}")
+        
+        # Ensure results are properly set in the processing_status
+        if not processing_status.get('results'):
+            print("WARNING: No results found after processing. This is unexpected.")
+            # Initialize results as empty array if it doesn't exist
+            processing_status['results'] = []
+        elif len(processing_status['results']) > 0:
+            print(f"First result: {processing_status['results'][0]}")
         
     except Exception as e:
         processing_status['error'] = f"Error processing CSV file: {str(e)}"
+        print(f"Error during processing: {str(e)}")
+        import traceback
+        traceback.print_exc()
     
     finally:
+        # Ensure is_processing is set to False
         processing_status['is_processing'] = False
+        print(f"Final processing status: is_processing={processing_status['is_processing']}, total_keywords={processing_status['total_keywords']}, processed_keywords={processing_status['processed_keywords']}, results_count={len(processing_status.get('results', []))}")
 
 if __name__ == '__main__':
     # Run the Flask app on port 5050

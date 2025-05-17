@@ -19,8 +19,19 @@ def read_keywords_from_csv(csv_file):
         print(f"Error reading CSV file: {e}")
         sys.exit(1)
 
+# Cache for storing API responses to avoid redundant calls
+ranking_cache = {}
+
 def get_ranking(client, keyword, target_url, location_code, language_code="en", location_name='', device='desktop'):
     """Get the ranking of a target URL for a specific keyword."""
+    # Create a cache key based on all parameters
+    cache_key = f"{keyword}_{target_url}_{location_code}_{language_code}_{location_name}_{device}"
+    
+    # Check if we have a cached result
+    if cache_key in ranking_cache:
+        print(f"  Using cached result for '{keyword}'")
+        return ranking_cache[cache_key]
+    
     post_data = dict()
     post_data[len(post_data)] = dict(
         language_code=language_code,
@@ -34,46 +45,14 @@ def get_ranking(client, keyword, target_url, location_code, language_code="en", 
     if location_name:
         post_data[len(post_data)-1]['geo_location'] = location_name
     
-    if location_name:
-        print(f"  Searching for '{keyword}' with location code: {location_code}, location: {location_name}, device: {device}")
-    else:
-        print(f"  Searching for '{keyword}' with location code: {location_code}, device: {device}")
+    # Simplified logging
+    print(f"  Searching for '{keyword}' ({device}, location: {location_code})")
+    
+    # Add a delay to avoid hitting API rate limits
+    time.sleep(2)
     
     try:
         response = client.post("/v3/serp/google/organic/live/advanced", post_data)
-        
-        # Print the entire response for the first keyword for debugging
-        if keyword == "registerkaro gurgaon":
-            print("\nAPI Response for first keyword:")
-            print(f"Status Code: {response.get('status_code')}")
-            print(f"Status Message: {response.get('status_message')}")
-            if "tasks" in response:
-                print(f"Number of tasks: {len(response['tasks'])}")
-                if len(response['tasks']) > 0 and "result" in response['tasks'][0]:
-                    print(f"Number of results: {len(response['tasks'][0]['result'])}")
-                    if len(response['tasks'][0]['result']) > 0:
-                        result = response['tasks'][0]['result'][0]
-                        print(f"Result structure: {list(result.keys())}")
-                        if "items" in result:
-                            print(f"Items type: {type(result['items'])}")
-                            if isinstance(result['items'], dict):
-                                print(f"Items keys: {list(result['items'].keys())}")
-                                if "organic" in result['items']:
-                                    print(f"Number of organic results: {len(result['items']['organic'])}")
-                                else:
-                                    print("No organic results found in items dictionary")
-                            elif isinstance(result['items'], list):
-                                print(f"Items list length: {len(result['items'])}")
-                                if len(result['items']) > 0:
-                                    print(f"First item type: {type(result['items'][0])}")
-                                    if isinstance(result['items'][0], dict):
-                                        print(f"First item keys: {list(result['items'][0].keys())}")
-                            else:
-                                print(f"Items is of unexpected type: {type(result['items'])}")
-                        else:
-                            print("No items found in result")
-            else:
-                print("No tasks found in response")
         
         if response["status_code"] == 20000:
             # Process the response to find the ranking of the target URL
@@ -88,71 +67,52 @@ def get_ranking(client, keyword, target_url, location_code, language_code="en", 
                         if isinstance(result["items"], dict) and "organic" in result["items"]:
                             if result["items"]["organic"] is not None:
                                 organic_results = result["items"]["organic"]
-                                print(f"  Found {len(organic_results)} organic results for '{keyword}'")
                             else:
-                                print(f"  No organic results found for '{keyword}'")
                                 return "No results found"
                         elif isinstance(result["items"], list):
                             # If items is a list, check if any item has a type of "organic"
-                            for item in result["items"]:
-                                if isinstance(item, dict) and item.get("type") == "organic":
-                                    organic_results.append(item)
+                            organic_results = [item for item in result["items"]
+                                              if isinstance(item, dict) and item.get("type") == "organic"]
                             
-                            if organic_results:
-                                print(f"  Found {len(organic_results)} organic results for '{keyword}'")
-                            else:
-                                print(f"  No organic results found in items list for '{keyword}'")
+                            if not organic_results:
                                 return "No results found"
                         else:
-                            print(f"  Unexpected items structure for '{keyword}'")
                             return "No results found"
                         
                         # Process organic results to find target URL
+                        target = target_url.lower()
+                        target_no_www = target.replace("www.", "")
+                        target_with_www = "www." + target
+                        
                         for position, item in enumerate(organic_results, 1):
                             if "url" in item:
                                 result_url = item["url"].lower()
-                                target = target_url.lower()
                                 
                                 # Try different variations of the target URL
                                 if (target in result_url or
-                                    target.replace("www.", "") in result_url or
-                                    "www." + target in result_url):
+                                    target_no_www in result_url or
+                                    target_with_www in result_url):
                                     # Extract additional ranking metrics if available
-                                    rank_info = {}
-                                    rank_info["position"] = position
+                                    rank_info = {
+                                        "position": position,
+                                        "rank_group": item.get("rank_group", position),
+                                        "rank_absolute": item.get("rank_absolute", position)
+                                    }
                                     
-                                    if "rank_group" in item:
-                                        rank_info["rank_group"] = item["rank_group"]
-                                    
-                                    if "rank_absolute" in item:
-                                        rank_info["rank_absolute"] = item["rank_absolute"]
-                                    
-                                    # Print detailed ranking information
-                                    print(f"  Found target URL at position {position}")
-                                    for key, value in rank_info.items():
-                                        if key != "position":
-                                            print(f"    {key}: {value}")
-                                    
-                                    # Return a dictionary with all ranking metrics
+                                    # Cache the result
+                                    ranking_cache[cache_key] = rank_info
                                     return rank_info
-                                
-                                # Print the first 5 results for debugging
-                                if position <= 5:
-                                    print(f"  Result {position}: {result_url}")
                         
                         # If the URL is not found in the results
-                        return "Not in top results"
+                        result = "Not in top results"
+                        ranking_cache[cache_key] = result
+                        return result
                     else:
-                        print(f"  No items found in result for '{keyword}'")
                         return "No results found"
                 else:
-                    print(f"  No valid result found in task for '{keyword}'")
                     return "No results found"
             else:
-                print(f"  No tasks found in response for '{keyword}'")
                 return "No results found"
-            
-            return "No results found"
         else:
             print(f"API Error. Code: {response['status_code']} Message: {response['status_message']}")
             return "API Error"
@@ -515,60 +475,74 @@ def main():
         if column not in header:
             header.append(column)
     
-    # Get ranking for each keyword and update CSV immediately
-    for i, keyword_row in enumerate(keywords_data):
-        # Check for either 'Keyword' or 'Keywords' column
-        if 'Keyword' in keyword_row:
+    # Determine the keyword column name once
+    if len(keywords_data) > 0:
+        if 'Keyword' in keywords_data[0]:
             keyword_column = 'Keyword'
-        elif 'Keywords' in keyword_row:
+        elif 'Keywords' in keywords_data[0]:
             keyword_column = 'Keywords'
         else:
             print("Error: CSV must contain either a 'Keyword' or 'Keywords' column.")
             sys.exit(1)
+    else:
+        print("Error: No keywords found in CSV file.")
+        sys.exit(1)
+    
+    # Process keywords in batches to improve performance
+    batch_size = 10  # Process 10 keywords before writing to CSV
+    total_keywords = len(keywords_data)
+    total_batches = (total_keywords + batch_size - 1) // batch_size
+    
+    for batch_index in range(total_batches):
+        start_idx = batch_index * batch_size
+        end_idx = min(start_idx + batch_size, total_keywords)
+        batch = keywords_data[start_idx:end_idx]
+        
+        print(f"Processing batch {batch_index + 1}/{total_batches} (keywords {start_idx + 1}-{end_idx} of {total_keywords})")
+        
+        # Process each keyword in the batch
+        for j, keyword_row in enumerate(batch):
+            keyword = keyword_row[keyword_column]
+            current_index = start_idx + j
+            print(f"Processing keyword ({current_index + 1}/{total_keywords}): {keyword}")
             
-        keyword = keyword_row[keyword_column]
-        print(f"Processing keyword ({i+1}/{len(keywords_data)}): {keyword}")
-        
-        # Get ranking and add to the row data
-        if test_mode:
-            ranking_info = get_mock_ranking(keyword, target_url)
-        else:
-            ranking_info = get_ranking(client, keyword, target_url, location_code, location_name='', device='desktop')
-        
-        # Handle different types of ranking values
-        if isinstance(ranking_info, dict):
-            keyword_row['Ranking'] = ranking_info.get('position', 'N/A')
-            keyword_row['Rank Group'] = ranking_info.get('rank_group', 'N/A')
-            keyword_row['Rank Absolute'] = ranking_info.get('rank_absolute', 'N/A')
-            keyword_row['Device'] = 'desktop'
+            # Get ranking and add to the row data
+            if test_mode:
+                ranking_info = get_mock_ranking(keyword, target_url)
+            else:
+                ranking_info = get_ranking(client, keyword, target_url, location_code, location_name='', device='desktop')
             
-            # Print detailed ranking information for debugging
-            print(f"  Storing ranking data: Position={keyword_row['Ranking']}, Rank Group={keyword_row['Rank Group']}, Rank Absolute={keyword_row['Rank Absolute']}")
-        else:
-            keyword_row['Ranking'] = ranking_info
-            keyword_row['Rank Group'] = 'N/A'
-            keyword_row['Rank Absolute'] = 'N/A'
-            keyword_row['Device'] = 'desktop'
+            # Handle different types of ranking values
+            if isinstance(ranking_info, dict):
+                keyword_row['Ranking'] = ranking_info.get('position', 'N/A')
+                keyword_row['Rank Group'] = ranking_info.get('rank_group', 'N/A')
+                keyword_row['Rank Absolute'] = ranking_info.get('rank_absolute', 'N/A')
+                keyword_row['Device'] = 'desktop'
+                
+                # Simplified logging
+                print(f"  Found at position: {keyword_row['Ranking']}")
+            else:
+                keyword_row['Ranking'] = ranking_info
+                keyword_row['Rank Group'] = 'N/A'
+                keyword_row['Rank Absolute'] = 'N/A'
+                keyword_row['Device'] = 'desktop'
+            
+            # Update the corresponding row in all_rows
+            for row in all_rows:
+                if row[keyword_column] == keyword:
+                    row['Ranking'] = keyword_row['Ranking']
+                    row['Rank Group'] = keyword_row['Rank Group']
+                    row['Rank Absolute'] = keyword_row['Rank Absolute']
+                    row['Device'] = keyword_row['Device']
+                    break
         
-        # Update the corresponding row in all_rows
-        for row in all_rows:
-            if row[keyword_column] == keyword:
-                row['Ranking'] = keyword_row['Ranking']
-                row['Rank Group'] = keyword_row['Rank Group']
-                row['Rank Absolute'] = keyword_row['Rank Absolute']
-                row['Device'] = keyword_row['Device']
-                break
-        
-        # Write the updated data back to the CSV file immediately
+        # Write the updated data back to the CSV file after processing the batch
         with open(csv_file, 'w', newline='') as file:
             writer = csv.DictWriter(file, fieldnames=header)
             writer.writeheader()
             writer.writerows(all_rows)
         
-        print(f"  Updated CSV file with ranking for '{keyword}'")
-        
-        # Add a small delay to avoid hitting API rate limits
-        time.sleep(1)
+        print(f"  Updated CSV file with rankings for batch {batch_index + 1}/{total_batches}")
     
     # Verify the file exists and has content
     try:
